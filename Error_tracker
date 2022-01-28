@@ -1,0 +1,117 @@
+import shlex
+import time
+import sys
+import json
+import subprocess
+import boto3
+import os
+from airflow import DAG
+from airflow.operators.python_operator import PythonOperator
+from airflow.operators.bash_operator import BashOperator
+from airflow.operators.dummy_operator import DummyOperator
+from datetime import datetime, timedelta
+from datetime import datetime, timedelta
+from airflow.utils.email import send_email
+from airflow.models import Variable, XCom
+sys.path.insert(1, '/home/airflow/AIRFLOW_GLOBAL/scripts')
+sys.path.insert(1, '/home/airflow/AIRFLOW_GLOBAL/common')
+from SSGAArchLib import *
+
+def start(**context):
+   timestamps= int(round(time.time() * 1000))
+   context["task_instance"].xcom_push(key='timestamps', value=timestamps)
+
+   print(timestamps)
+   batch_start = {"job_type": "batch_start", "batch_identifier":"{}".format(timestamps), "control_id": "", "batch_number": "826"}
+   with open('ul-{}-{}.json'.format("batch_start", timestamps), "w", encoding='utf-8') as outfile4:
+     json.dump(batch_start, outfile4)
+   s3=boto3.resource('s3')
+   bucket=s3.Bucket('gs-appdata-sbx6-ue1')
+   bucket.upload_file('ul-{}-{}.json'.format("batch_start", timestamps), 'DPE_0105/SBX/REPL/OGG/RAW/ABC-POC/ul-{}-{}.json'.format("batch_start", timestamps))
+
+
+   job_start = {"job_type": "job_start", "batch_identifier":"826_{}".format(timestamps), "control_id": "", "batch_number": "826", "job_params": {"job_number": "1618", "job_id": "826_1618_{}".format(timestamps), "job_status": "Started"}}
+
+   with open('ul-{}-{}.json'.format("job_start", timestamps), "w", encoding='utf-8') as outfile5:
+     json.dump(job_start, outfile5)
+   s3=boto3.resource('s3')
+   bucket=s3.Bucket('gs-appdata-sbx6-ue1')
+   bucket.upload_file('ul-{}-{}.json'.format("job_start", timestamps), 'DPE_0105/SBX/REPL/OGG/RAW/ABC-POC/ul-{}-{}.json'.format("job_start", timestamps))
+
+
+def failure_script(context):
+
+    timestamp = context["task_instance"].xcom_pull(task_ids='start', key='timestamps')
+
+    Job_error = {"job_type":"job_error", "batch_identifier": "826_{}".format(timestamp), "control_id": "", "batch_number": "826", "job_params": {"reject_attributes": {"primary_key": "Error", "reason_description":str(context['exception'])}, "job_number": "1618", "job_id":"826_1618_{}".format(timestamp)}}
+
+    with open('ul-{}-{}.json'.format("bsError", timestamp), "w", encoding='utf-8') as outfile1:
+      json.dump(Job_error, outfile1)
+    s3=boto3.resource('s3')
+    bucket=s3.Bucket('gs-appdata-sbx6-ue1')
+    bucket.upload_file('ul-{}-{}.json'.format("bsError", timestamp), 'DPE_0105/SBX/REPL/OGG/RAW/ABC-POC/ul-{}-{}.json'.format("bsError", timestamp))
+
+
+
+def success_script(context):
+
+    timestamp = context["task_instance"].xcom_pull(task_ids='start', key='timestamps')
+
+    job_end = {"job_type": "job_end", "batch_identifier":"826_{}".format(timestamp), "control_id": "", "batch_number": "826", "job_params": {"job_number": "1618", "job_id": "826_1618_{}".format(timestamp), "job_status": "Completed", "return_code": 0}}
+
+
+    with open('ul-{}-{}.json'.format("job_end", timestamp), "w", encoding='utf-8') as outfile2:
+      json.dump(job_end, outfile2)
+
+    s3=boto3.resource('s3')
+    bucket=s3.Bucket('gs-appdata-sbx6-ue1')
+    bucket.upload_file('ul-{}-{}.json'.format("job_end", timestamp), 'DPE_0105/SBX/REPL/OGG/RAW/ABC-POC/ul-{}-{}.json'.format("job_end", timestamp))
+
+def batch_end(**context):
+    timestamp = context["task_instance"].xcom_pull(task_ids='start', key='timestamps')
+
+    print(timestamp)
+    batch_end = {"job_type": "batch_end", "batch_identifier":"{}".format(timestamp), "control_id": "", "batch_number": "826"}
+    with open('ul-{}-{}.json'.format("batch_end", timestamp), "w", encoding='utf-8') as outfile3:
+      json.dump(batch_end, outfile3)
+    s3=boto3.resource('s3')
+    bucket=s3.Bucket('gs-appdata-sbx6-ue1')
+    bucket.upload_file('ul-{}-{}.json'.format("batch_end", timestamp), 'DPE_0105/SBX/REPL/OGG/RAW/ABC-POC/ul-{}-{}.json'.format("batch_end", timestamp))
+
+
+
+
+def print_hello():
+     print(helllooooooo)
+def AoK(**kwargs):
+     print(kwargs)
+
+default_args = {
+    'owner': 'airflow',
+    'depends_on_past': False,
+    'start_date': datetime(2021, 9, 20),
+    'email': ['Igor_Lavin@ssga.com'],
+    'email_on_failure':False,
+    'email_on_retry': False,
+    'retries': 0,
+    'on_failure_callback': failure_script,
+    'retry_delay': timedelta(minutes=1)
+}
+
+
+
+# dag definition
+dag = DAG('test_igor', tags=['nza2rsh','SBX'], default_args=default_args, catchup=False, schedule_interval='*/5 * * * *', max_active_runs=1)
+
+start = PythonOperator(task_id='start', python_callable=start, dag=dag, provide_context=True)
+
+
+t1 = PythonOperator(task_id='t1', python_callable=AoK, dag=dag, on_success_callback=success_script, provide_context=True)
+
+
+t2 = PythonOperator(task_id='t2', python_callable= print_hello,  dag=dag, provide_context=True)
+
+
+end = PythonOperator(task_id='end', python_callable=batch_end, dag=dag,trigger_rule='one_success', provide_context=True)
+
+start >> [t1, print_hello_msg] >> end
